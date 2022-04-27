@@ -15,7 +15,11 @@ if (BUILD_ZMQ_GATEWAY)
     include_directories("${ZeroMQ_INCLUDE_DIR}")
     target_link_libraries(apps libzmq)
 endif(BUILD_ZMQ_GATEWAY)
+
+if (ENABLE_QUIC)
+    target_link_libraries(apps msquic)
+endif(ENABLE_QUIC)
+
 target_link_libraries(apps nng)
-#target_link_libraries(apps nano_shared)
 target_link_libraries(apps nanolib)
 target_compile_definitions(apps PRIVATE -DPARALLEL=${PARALLEL})
