@@ -4,3 +4,6 @@
 [submodule "extern/l8w8jwt"]
 	path = extern/l8w8jwt
 	url = https://github.com/GlitchedPolygons/l8w8jwt.git
+[submodule "extern/msquic"]
+	path = extern/msquic
+	url = git@github.com:microsoft/msquic.git
