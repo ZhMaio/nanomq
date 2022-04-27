@@ -9,17 +9,12 @@ struct work {
 	nng_ctx  ctx;
 };
 
-enum options {
-	OPT_HELP = 1,
-	OPT_CONFFILE,
-};
-
 static char * help_info = "test for quic\n\n";
 
 static int               nwork  = 32;
 
-void
-proxy_fatal(const char *msg, int rv)
+static void
+quic_fatal(const char *msg, int rv)
 {
 	fprintf(stderr, "%s: %s\n", msg, nng_strerror(rv));
 }
@@ -57,7 +52,7 @@ connect_cb(nng_pipe p, nng_pipe_ev ev, void *arg)
 	int rv = 0;
 	rv     = nng_sendmsg(sock, msg, NNG_FLAG_NONBLOCK);
 	if (rv != 0) {
-		proxy_fatal("nng_sendmsg", rv);
+		quic_fatal("nng_sendmsg", rv);
 	}
 }
 
@@ -76,7 +71,7 @@ quic_sub_cb(void *arg)
 	case RECV:
 		if ((rv = nng_aio_result(work->aio)) != 0) {
 			nng_msg_free(work->msg);
-			proxy_fatal("nng_send_aio", rv);
+			quic_fatal("nng_send_aio", rv);
 		}
 		msg = nng_aio_get_msg(work->aio);
 
@@ -84,7 +79,7 @@ quic_sub_cb(void *arg)
 		nng_ctx_recv(work->ctx, work->aio);
 		break;
 	default:
-		proxy_fatal("bad state!", NNG_ESTATE);
+		quic_fatal("bad state!", NNG_ESTATE);
 		break;
 	}
 }
@@ -96,13 +91,13 @@ proxy_alloc_work(nng_socket sock)
 	int          rv;
 
 	if ((w = nng_alloc(sizeof(*w))) == NULL) {
-		proxy_fatal("nng_alloc", NNG_ENOMEM);
+		quic_fatal("nng_alloc", NNG_ENOMEM);
 	}
 	if ((rv = nng_aio_alloc(&w->aio, quic_sub_cb, w)) != 0) {
-		proxy_fatal("nng_aio_alloc", rv);
+		quic_fatal("nng_aio_alloc", rv);
 	}
 	if ((rv = nng_ctx_open(&w->ctx, sock)) != 0) {
-		proxy_fatal("nng_ctx_open", rv);
+		quic_fatal("nng_ctx_open", rv);
 	}
 	w->state = INIT;
 	return (w);
@@ -127,10 +122,58 @@ client_publish(nng_socket sock, const char *topic, uint8_t *payload,
 
 	// printf("Publishing '%s' to '%s' ...\n", payload, topic);
 	if ((rv = nng_sendmsg(sock, pubmsg, NNG_FLAG_NONBLOCK)) != 0) {
-		proxy_fatal("nng_sendmsg", rv);
+		quic_fatal("nng_sendmsg", rv);
 	}
 
 	return rv;
+}
+
+// Config for msquic
+const QUIC_REGISTRATION_CONFIG RegConfig = { "quicsample", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
+const QUIC_BUFFER Alpn = { sizeof("sample") - 1, (uint8_t*)"sample" };
+const uint16_t UdpPort = 4567;
+const uint64_t IdleTimeoutMs = 1000;
+const uint32_t SendBufferLength = 100;
+const QUIC_API_TABLE* MsQuic;
+const QUIC_API_TABLE* MsQuic;
+HQUIC Registration;
+HQUIC Configuration;
+
+void
+quic_open()
+{
+    QUIC_STATUS Status = QUIC_STATUS_SUCCESS;
+
+    if (QUIC_FAILED(Status = MsQuicOpen2(&MsQuic))) {
+        printf("MsQuicOpen2 failed, 0x%x!\n", Status);
+        goto Error;
+    }
+
+    //
+    // Create a registration for the app's connections.
+    //
+    if (QUIC_FAILED(Status = MsQuic->RegistrationOpen(&RegConfig, &Registration))) {
+        printf("RegistrationOpen failed, 0x%x!\n", Status);
+        goto Error;
+    }
+
+	printf("msquic is started.\n");
+
+Error:
+
+    if (MsQuic != NULL) {
+        if (Configuration != NULL) {
+            MsQuic->ConfigurationClose(Configuration);
+        }
+        if (Registration != NULL) {
+            //
+            // This will block until all outstanding child objects have been
+            // closed.
+            //
+            MsQuic->RegistrationClose(Registration);
+        }
+        MsQuicClose(MsQuic);
+    }
 }
 
 int
@@ -142,11 +185,14 @@ client(const char *url, nng_socket *sock_ret)
 	struct work *works[nwork];
 
 	if ((rv = nng_mqtt_client_open(&sock)) != 0) {
-		proxy_fatal("nng_socket", rv);
+		quic_fatal("nng_socket", rv);
 		return rv;
 	}
 
 	*sock_ret = sock;
+
+	// Quic settings
+	quic_open();
 
 	for (int i = 0; i < nwork; i++) {
 		works[i] = proxy_alloc_work(sock);
@@ -161,7 +207,7 @@ client(const char *url, nng_socket *sock_ret)
 	nng_mqtt_set_disconnect_cb(sock, disconnect_cb, NULL);
 
 	if ((rv = nng_dialer_create(&dialer, sock, url)) != 0) {
-		proxy_fatal("nng_dialer_create", rv);
+		quic_fatal("nng_dialer_create", rv);
 	}
 
 	nng_dialer_set_ptr(dialer, NNG_OPT_MQTT_CONNMSG, msg);
@@ -178,7 +224,7 @@ int
 quic_run()
 {
 	nng_socket sock;
-	char * mqtt_url = "mqtt-tcp://broker.emqx.io:1883";
+	char * mqtt_url = "mqtt-tcp://0.0.0.0:1883";
 	char * text = malloc(sizeof(char) * 20);
 
 	client(mqtt_url, &sock);
